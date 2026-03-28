@@ -1,0 +1,6 @@
+requests
+httpx
+beautifulsoup4
+fastapi
+uvicorn[standard]
+python-multipart
