@@ -154,9 +154,10 @@ class GeminiClient:
             clean_text = raw_text.lstrip(")]}'\n ")
             
             # Gemini typically returns multiple chunks.
-            chunks = re.split(r'\d+\n', clean_text)
+            chunks = re.split(r'\d+\r?\n', clean_text)
             
             result = {"content": "", "images": [], "conversation_id": self.conversation_id}
+            pending_error = None
 
             for chunk in chunks:
                 if not chunk.strip():
@@ -172,11 +173,11 @@ class GeminiClient:
                         if isinstance(item, list) and len(item) > 0:
                             if item[0] == "e":
                                 error_code = item[-1] if len(item) > 4 else "unknown"
-                                return {"error": f"Google Backend Error ({error_code}). This usually means the session is expired or the IP is blocked (common on Vercel).", "raw": raw_text}
+                                pending_error = {"error": f"Google Backend Error ({error_code}). This usually means the session is expired or the IP is blocked (common on Vercel).", "raw": raw_text}
                             
                             if item[0] == "wrb.fr" and (len(item) < 3 or item[2] is None):
                                 error_meta = item[-1] if len(item) > 5 else "unknown"
-                                return {"error": f"Google Session Rejected (Code {error_meta}). Your cookies might be invalid or Vercel's IP is blocked.", "raw": raw_text}
+                                pending_error = {"error": f"Google Session Rejected (Code {error_meta}). Your cookies might be invalid or Vercel's IP is blocked.", "raw": raw_text}
 
                     # Case 1: The "wrb.fr" wrapper with valid data
                     for item in data:
@@ -215,13 +216,20 @@ class GeminiClient:
             # Remove duplicate images
             result["images"] = list(dict.fromkeys(images))
             
-            if not result["content"] and not result["images"]:
-                # Explicit check for the known 'null' error pattern in raw text
-                if "wrb.fr" in str(raw_text) and ("null" in str(raw_text) or "Error" in str(raw_text)): # type: ignore
-                    return {"error": "Google returned an empty response. This often happens on Vercel due to IP-based session invalidation.", "raw": raw_text}
-                return {"error": "Could not parse response content. Google might have changed the format.", "raw": raw_text}
+            # Priority 1: Content found - RETURN SUCCESS (ignore pending errors like 2601)
+            if result["content"] or result["images"]:
+                return result
             
-            return result
+            # Priority 2: No content but has a pending error - RETURN ERROR
+            if pending_error:
+                return pending_error
+            
+            # Priority 3: No content, no images, no explicit error chunk
+            # Explicit check for the known 'null' error pattern in raw text
+            if "wrb.fr" in str(raw_text) and ("null" in str(raw_text) or "Error" in str(raw_text)): # type: ignore
+                return {"error": "Google returned an empty response. This often happens on Vercel due to IP-based session invalidation.", "raw": raw_text}
+            
+            return {"error": "Could not parse response content. Google might have changed the format.", "raw": raw_text}
             
         except Exception as e:
             import traceback
