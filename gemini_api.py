@@ -35,38 +35,48 @@ class GeminiClient:
         self.session.cookies.set("__Secure-1PSIDTS", psidts, domain=".google.com")
         
         self.at_token: Optional[str] = None
+        self.bl_label: Optional[str] = "boq_assistant-bard-web-server_20240319.10_p0" # Fallback
         self.conversation_id: str = ""
         self.response_id: str = ""
         self.choice_id: str = ""
-        self.req_id: int = random.randint(1000, 9999)
+        self.req_id: int = random.randint(100000, 999999)
 
     def _get_at_token(self):
         """
-        Internal method to fetch the 'at' (SNlM0e) token from the Gemini application page.
-        This token is required for all POST requests to the API.
+        Internal method to fetch the 'at' (SNlM0e) token and current build label (bl) from the Gemini application page.
         """
         response = self.session.get(f"{self.BASE_URL}/app", timeout=10)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch Gemini page. Status code: {response.status_code}")
         
-        # Extract the SNlM0e token using regex
-        match = re.search(r'SNlM0e":"(.*?)"', response.text)
-        if match:
-            self.at_token = match.group(1) # type: ignore
+        # Extract the SNlM0e token
+        match_at = re.search(r'SNlM0e":"(.*?)"', response.text)
+        if match_at:
+            self.at_token = match_at.group(1) # type: ignore
         else:
             raise Exception("Could not find SNlM0e token. Your cookies might be expired or invalid.")
 
-    def ask(self, prompt):
+        # Extract the build label (bl)
+        match_bl = re.search(r'"cfb2h":"(.*?)"', response.text)
+        if match_bl:
+            self.bl_label = match_bl.group(1)
+            print(f"[*] DEBUG: Dynamic Build Label extracted: {self.bl_label}")
+
+    def ask(self, prompt, is_retry=False):
         """
         Send a prompt to Gemini and return the response.
         :param prompt: The text message to send.
+        :param is_retry: Internally used to prevent infinite recursion on at_token refresh.
         :return: A dictionary containing the text response and metadata.
         """
         if not self.at_token:
             self._get_at_token()
 
+        # Increment req_id to simulate browser flow
+        self.req_id += random.randint(1000, 5000)
+
         url_params = {
-            "bl": "boq_assistant-bard-web-server_20240319.10_p0",
+            "bl": self.bl_label,
             "_reqid": str(self.req_id),
             "rt": "c"
         }
@@ -90,6 +100,12 @@ class GeminiClient:
                 data=payload, 
                 timeout=60
             )
+
+            # Handle session expiration/mismatch and retry once
+            if response.status_code in [401, 403] and not is_retry:
+                print("[*] WARNING: Session potentially expired. Refreshing at_token...")
+                self._get_at_token()
+                return self.ask(prompt, is_retry=True)
 
             if response.status_code != 200:
                 return {"error": f"Request failed with status {response.status_code}", "raw": response.text}
