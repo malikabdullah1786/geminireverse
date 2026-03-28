@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Header # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
-from fastapi.responses import JSONResponse, FileResponse # type: ignore
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse # type: ignore
 from fastapi.staticfiles import StaticFiles # type: ignore
 from pydantic import BaseModel # type: ignore
 from gemini_api import GeminiClient
+import requests # type: ignore
 import os
 import uuid
 import json
@@ -198,6 +199,53 @@ async def chat(request: ChatSchema, x_gemini_key: str = Header(None, alias="X-Ge
         if "error" in response:
             return JSONResponse(status_code=500, content=response)
         return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/proxy_image")
+async def proxy_image(url: str, x_user_id: str = Header(None, alias="X-User-ID"), user_id: str = None):
+    # Support both header and query param for image tag compatibility
+    final_uid = x_user_id or user_id
+    if not final_uid or final_uid not in CLIENTS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Reject known invalid placeholder URLs
+    if "image_generation_content" in url:
+        raise HTTPException(status_code=400, detail="Invalid image placeholder URL")
+    
+    client = CLIENTS[final_uid]
+    try:
+        # For googleusercontent.com, cookies need to be explicitly passed
+        # because session cookies are scoped to .google.com
+        headers = {
+            "Referer": "https://gemini.google.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        
+        # Extract cookies from the client session and send them to googleusercontent.com
+        cookies = {}
+        for cookie in client.session.cookies:
+            cookies[cookie.name] = cookie.value
+        
+        resp = requests.get(url, headers=headers, cookies=cookies, stream=True, timeout=15)
+        
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch image from Google (status {resp.status_code})")
+            
+        content_type = resp.headers.get("Content-Type", "image/png")
+        
+        # Safety check: only allow image content types
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="URL did not return an image")
+        
+        return StreamingResponse(
+            resp.iter_content(chunk_size=8192),
+            media_type=content_type,
+            headers={"Cache-Control": "max-age=3600"}
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
