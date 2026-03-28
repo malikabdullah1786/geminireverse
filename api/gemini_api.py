@@ -1,8 +1,9 @@
-import requests
+import requests # type: ignore
 import json
 import re
 import random
-from bs4 import BeautifulSoup
+from typing import Optional, Dict, Any, List
+from bs4 import BeautifulSoup # type: ignore
 
 class GeminiClient:
     """
@@ -33,11 +34,11 @@ class GeminiClient:
         self.session.cookies.set("__Secure-1PSID", psid, domain=".google.com")
         self.session.cookies.set("__Secure-1PSIDTS", psidts, domain=".google.com")
         
-        self.at_token = None
-        self.conversation_id = ""
-        self.response_id = ""
-        self.choice_id = ""
-        self.req_id = random.randint(1000, 9999)
+        self.at_token: Optional[str] = None
+        self.conversation_id: str = ""
+        self.response_id: str = ""
+        self.choice_id: str = ""
+        self.req_id: int = random.randint(1000, 9999)
 
     def _get_at_token(self):
         """
@@ -51,7 +52,7 @@ class GeminiClient:
         # Extract the SNlM0e token using regex
         match = re.search(r'SNlM0e":"(.*?)"', response.text)
         if match:
-            self.at_token = match.group(1)
+            self.at_token = match.group(1) # type: ignore
         else:
             raise Exception("Could not find SNlM0e token. Your cookies might be expired or invalid.")
 
@@ -215,8 +216,8 @@ class GeminiClient:
             result["images"] = list(dict.fromkeys(images))
             
             if not result["content"] and not result["images"]:
-                # If we get here and there's no error detected above, return a clearer message
-                if "wrb.fr" in raw_text and "null" in raw_text:
+                # Explicit check for the known 'null' error pattern in raw text
+                if "wrb.fr" in str(raw_text) and ("null" in str(raw_text) or "Error" in str(raw_text)): # type: ignore
                     return {"error": "Google returned an empty response. This often happens on Vercel due to IP-based session invalidation.", "raw": raw_text}
                 return {"error": "Could not parse response content. Google might have changed the format.", "raw": raw_text}
             

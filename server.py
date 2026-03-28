@@ -1,21 +1,32 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, Depends, Header # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
+from fastapi.responses import JSONResponse, FileResponse # type: ignore
+from fastapi.staticfiles import StaticFiles # type: ignore
+from pydantic import BaseModel # type: ignore
 from gemini_api import GeminiClient
 import os
 import uuid
 import json
+from typing import Any, Dict, Optional, List # type: ignore
 
 app = FastAPI()
+
+# Enable CORS for all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_FILE = os.path.join(SCRIPT_DIR, "api", "session.json")
 
 # Global state (Multi-Tenant)
-CLIENTS = {}      # user_id -> GeminiClient
-API_KEYS = {}     # api_key -> user_id
-USER_CONFIGS = {} # user_id -> {"api_key": ..., "psid": ..., "psidts": ...}
+CLIENTS: Dict[str, GeminiClient] = {}      # user_id -> GeminiClient
+API_KEYS: Dict[str, str] = {}     # api_key -> user_id
+USER_CONFIGS: Dict[str, Dict[str, Any]] = {} # user_id -> {"api_key": ..., "psid": ..., "psidts": ...}
 
 def save_all_sessions():
     """Persists all user sessions to a local JSON file (pretty-printed)."""
@@ -37,17 +48,25 @@ def load_all_sessions():
                     return # Silent return for empty file
                 data = json.loads(content)
                 
-                # Check for legacy single-user format
-                if "psid" in data and "psidts" in data:
-                    uid = "legacy_user"
-                    USER_CONFIGS = {uid: data}
+                if isinstance(data, dict):
+                    # Check for legacy single-user format
+                    if "psid" in data and "psidts" in data:
+                        uid = "legacy_user"
+                        USER_CONFIGS.clear()
+                        USER_CONFIGS[uid] = data
+                    else:
+                        USER_CONFIGS.clear()
+                        USER_CONFIGS.update(data)
                 else:
-                    USER_CONFIGS = data
+                    print(f"[*] WARNING: Invalid session data format in {SESSION_FILE} (expected dict).")
+                    USER_CONFIGS.clear()
                 
                 for uid, config in USER_CONFIGS.items():
                     try:
                         CLIENTS[uid] = GeminiClient(config["psid"], config["psidts"])
-                        API_KEYS[config.get("api_key")] = uid
+                        api_key = config.get("api_key")
+                        if api_key:
+                            API_KEYS[api_key] = uid
                     except Exception as e:
                         print(f"[*] Failed to restore session for {uid}: {e}")
             
@@ -149,10 +168,10 @@ async def clear_session(x_user_id: str = Header(None, alias="X-User-ID")):
     if x_user_id in USER_CONFIGS:
         key = USER_CONFIGS[x_user_id].get("api_key")
         if key in API_KEYS:
-            del API_KEYS[key]
-        del USER_CONFIGS[x_user_id]
+            del API_KEYS[key] # type: ignore
+        del USER_CONFIGS[x_user_id] # type: ignore
         if x_user_id in CLIENTS:
-            del CLIENTS[x_user_id]
+            del CLIENTS[x_user_id] # type: ignore
         save_all_sessions()
     return {"status": "cleared"}
 
