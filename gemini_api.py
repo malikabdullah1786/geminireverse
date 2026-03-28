@@ -165,9 +165,21 @@ class GeminiClient:
                     data = json.loads(chunk)
                     find_images(data) # Collect all images from the chunk
                     
-                    # Case 1: The "wrb.fr" wrapper
+                    # Detect Google Internal Errors (Session Expired/IP Blocked)
+                    # Pattern: ["e", 4, null, null, 133] or ["wrb.fr", null, null, null, null, [13]]
                     for item in data:
-                        if isinstance(item, list) and len(item) > 2 and item[0] == "wrb.fr":
+                        if isinstance(item, list) and len(item) > 0:
+                            if item[0] == "e":
+                                error_code = item[-1] if len(item) > 4 else "unknown"
+                                return {"error": f"Google Backend Error ({error_code}). This usually means the session is expired or the IP is blocked (common on Vercel).", "raw": raw_text}
+                            
+                            if item[0] == "wrb.fr" and (len(item) < 3 or item[2] is None):
+                                error_meta = item[-1] if len(item) > 5 else "unknown"
+                                return {"error": f"Google Session Rejected (Code {error_meta}). Your cookies might be invalid or Vercel's IP is blocked.", "raw": raw_text}
+
+                    # Case 1: The "wrb.fr" wrapper with valid data
+                    for item in data:
+                        if isinstance(item, list) and len(item) > 2 and item[0] == "wrb.fr" and item[2] is not None:
                             inner_data = json.loads(item[2])
                             find_images(inner_data)
                             
@@ -203,8 +215,10 @@ class GeminiClient:
             result["images"] = list(dict.fromkeys(images))
             
             if not result["content"] and not result["images"]:
-                print(f"DEBUG: Could not parse response. Raw text snippet: {raw_text[:500]}")
-                return {"error": "Could not parse response text", "raw": raw_text}
+                # If we get here and there's no error detected above, return a clearer message
+                if "wrb.fr" in raw_text and "null" in raw_text:
+                    return {"error": "Google returned an empty response. This often happens on Vercel due to IP-based session invalidation.", "raw": raw_text}
+                return {"error": "Could not parse response content. Google might have changed the format.", "raw": raw_text}
             
             return result
             
